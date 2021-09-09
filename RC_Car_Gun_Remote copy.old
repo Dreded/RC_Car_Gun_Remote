@@ -1,0 +1,428 @@
+/*
+   See documentation at https://nRF24.github.io/RF24
+   See License information at root directory of this library
+   Author: Brendan Doherty (2bndy5)
+*/
+
+/**
+   A simple example of sending data from 1 nRF24L01 transceiver to another.
+
+   This example was written to be used on 2 devices acting as "nodes".
+   Use the Serial Monitor to change each node's behavior.
+*/
+#include <SPI.h>
+#include <EEPROM.h>
+#include <Servo.h>
+#include "printf.h"
+#include "RF24.h"
+#include "ServoEasing.h"
+
+RF24 radio(7, 8); // using pin 7 for the CE pin, and pin 8 for the CSN pin
+
+Servo servo_throttle; // create servo object to control a servo
+Servo servo_steering;
+Servo servo_aux1;
+Servo servo_aux2;
+Servo servo_aux3;
+Servo servo_aux4;
+
+/****************
+ *              *
+   Sane Defaults 
+ *              *
+ ****************/
+const long interval = 750; // how often to send if no new command(recv will add recv_stop_time before stopping)
+const long recv_stop_time = 250;
+bool role = 0;                   // true/1 = TX role, false/0 = RX role(also set by eeprom 0)
+uint8_t throttle_dead_zone = 10; //10
+uint8_t steering_dead_zone = 25; //20
+uint8_t throttle_middle = 108;   //127
+uint8_t steering_middle = 134;   //127
+uint8_t throttle_min = 70;       //255
+uint8_t throttle_max = 140;      //0
+uint8_t steering_min = 75;       //255
+uint8_t steering_max = 180;      //0
+uint8_t training_mode = 0;       //Set via jumper for now on D2 but moving to screen later
+uint8_t training_mode_throttle_max_percent = 50;
+uint8_t throttle_max_percent = 100;
+
+/**********************
+ *                    *
+   DO NOT CHANGE BELOW
+ *                    *
+ **********************/
+uint8_t throttle_last = 255;
+uint8_t steering_last = 255;
+bool throttle_change = false;
+bool steering_change = false;
+byte eeprom_set = EEPROM.read(255);
+bool resend = false;
+
+
+uint8_t throttleSmoothed = 90;
+uint8_t throttleSmoothedPrev = throttleSmoothed;
+
+uint8_t steeringSmoothed = 90;
+uint8_t steeringSmoothedPrev = steeringSmoothed;
+
+unsigned long previousMillis = 0; // last time a command was sent
+
+// Let these addresses be used for the pair
+uint8_t address[][6] = {"1Node", "2Node"};
+// It is very helpful to think of an address as a path instead of as
+// an identifying device destination
+
+// Define Joystick Connections
+#define THROTTLE A1
+#define STEERING A3
+
+// Declare unsigned 8-bit joystick array
+uint8_t joystick[4];
+
+void setup()
+{
+  Serial.begin(9600);
+  if (eeprom_set != 1)
+  {
+    Serial.println(F("Set defaults to EEPROM this is now a Receiver"));
+    //Set Defaults to be a Receiver Node
+    EEPROM.write(0, 0);
+    EEPROM.write(1, throttle_dead_zone);
+    EEPROM.write(2, steering_dead_zone);
+    EEPROM.write(3, throttle_middle);
+    EEPROM.write(4, steering_middle);
+    EEPROM.write(5, throttle_min);
+    EEPROM.write(6, throttle_max);
+    EEPROM.write(7, steering_min);
+    EEPROM.write(8, steering_max);
+    EEPROM.write(255, 1); // Mark eeprom as written
+  }
+  else
+  {
+    Serial.println(F("Read Data from EEPROM."));
+    role = EEPROM.read(0);
+    throttle_dead_zone = EEPROM.read(1);
+    steering_dead_zone = EEPROM.read(2);
+    throttle_middle = EEPROM.read(3);
+    steering_middle = EEPROM.read(4);
+    throttle_min = EEPROM.read(5);
+    throttle_max = EEPROM.read(6);
+    steering_min = EEPROM.read(7);
+    steering_max = EEPROM.read(8);
+  }
+
+  bool radioNumber = role; // 0 uses address[0] to transmit, 1 uses address[1] to transmit
+  if (role)                //we are TX
+  {
+    pinMode(THROTTLE, INPUT);
+    pinMode(STEERING, INPUT);
+    pinMode(2, INPUT_PULLUP);
+    Serial.println(F("Ardunio Wireless Car Radio Controller"));
+    if (!digitalRead(2))
+    {
+      training_mode = 1;
+      throttle_max_percent = training_mode_throttle_max_percent;
+      Serial.print(F("Training Mode Enabled Throttle Limited to:"));
+      Serial.println(throttle_max_percent);
+    }
+  }
+  else // we are RX
+  {
+    Serial.println(F("Arduino Wireless Car Radio Receiver"));
+
+    servo_throttle.attach(2, 1000, 2000); // attach servo to indicated pin
+    servo_steering.attach(3, 1000, 2000); // attach servo to indicated pin
+    servo_aux1.attach(4, 1000, 2000);     // attach servo to indicated pin
+    servo_aux3.attach(6, 1000, 2000);     // attach servo to indicated pin
+    servo_aux2.attach(5, 1000, 2000);     // attach servo to indicated pin
+    servo_aux4.attach(9, 1000, 2000);     // attach servo to indicated pin
+  }
+
+  if (!radio.begin())
+  {
+    Serial.println(F("Radio hardware is not responding!!"));
+    while (1)
+    {
+    } // hold in infinite loop
+  }
+  Serial.print(F("RadioNumber = "));
+  Serial.println((int)radioNumber);
+
+  // Set the PA Level low to try preventing power supply related problems
+  // because these examples are likely run with nodes in close proximity to
+  // each other.
+  radio.setPALevel(RF24_PA_LOW); // RF24_PA_MAX is default.
+
+  // save on transmission time by setting the radio to only transmit the
+  // number of bytes we need to transmit
+  radio.setPayloadSize(sizeof(joystick));
+
+  // set the TX address of the RX node into the TX pipe
+  radio.openWritingPipe(address[radioNumber]); // always uses pipe 0
+
+  // set the RX address of the TX node into a RX pipe
+  radio.openReadingPipe(1, address[!radioNumber]); // using pipe 1
+
+  // additional setup specific to the node's role
+  if (role)
+  {
+    radio.stopListening(); // put radio in TX mode
+  }
+  else
+  {
+    radio.startListening(); // put radio in RX mode
+  }
+
+  // For debugging info
+  // printf_begin();             // needed only once for printing details
+  // radio.printDetails();       // (smaller) function that prints raw register values
+  // radio.printPrettyDetails(); // (larger) function that prints human readable data
+
+} // setup
+
+void Read_Joystick(uint8_t (&joystick)[4])
+{
+
+  unsigned long currentMillis = millis();
+  if (steering_change || throttle_change || resend || (currentMillis - previousMillis >= interval))
+  {
+    previousMillis = currentMillis;
+    // Serial.print(joystick[0]);
+    // Serial.print(F(" / "));
+    // Serial.println(joystick[1]);
+    throttle_change = false;
+    steering_change = false;
+    resend = false;
+    // This device is a TX node
+    unsigned long start_timer = micros();                   // start the timer
+    bool report = radio.write(&joystick, sizeof(joystick)); // transmit & save the report
+    unsigned long end_timer = micros();                     // end the timer
+    if (report)
+    {
+      // Serial.print(F("Transmission successful! ")); // payload was delivered
+      // Serial.print(F("Time to transmit = "));
+      // Serial.print(end_timer - start_timer); // print the timer result
+      // Serial.print(F(" us. Throttle: "));
+      // Serial.print(joystick[0]); // print payload sent
+      // Serial.print(F("\tSteering: "));
+      // Serial.println(joystick[1]); // print payload sent
+    }
+    else
+    {
+      resend = true;
+      //  Serial.println(F("Transmission failed or timed out")); // payload was not delivered
+    }
+  }
+
+  int throttleValue = analogRead(THROTTLE);
+  int steeringValue = analogRead(STEERING);
+
+  uint8_t throttle_percent = 0;
+  uint8_t steering_percent = 0;
+
+  joystick[0] = map(throttleValue, 0, 1023, 0, 255);
+  joystick[1] = map(steeringValue, 0, 1023, 0, 255);
+  if (joystick[0] < throttle_min)
+    joystick[0] = throttle_min;
+  if (joystick[0] > throttle_max)
+    joystick[0] = throttle_max;
+  if (joystick[1] < steering_min)
+    joystick[1] = steering_min;
+  if (joystick[1] > steering_max)
+    joystick[1] = steering_max;
+  // Serial.print(joystick[0]);
+  // Serial.print(" / ");
+  // Serial.println(joystick[1]);
+
+  if (joystick[0] < throttle_middle - throttle_dead_zone)
+  {
+    joystick[2] = char('F');
+    throttle_percent = map(joystick[0], throttle_middle - throttle_dead_zone, throttle_min, 0, throttle_max_percent);
+  }
+  else if (joystick[0] > throttle_middle + throttle_dead_zone)
+  {
+    joystick[2] = char('R');
+    throttle_percent = map(joystick[0], throttle_middle + throttle_dead_zone, throttle_max, 0, throttle_max_percent);
+  }
+  else
+    joystick[2] = char('S');
+  if (throttle_percent > throttle_max_percent)
+    throttle_percent = throttle_max_percent;
+  joystick[0] = throttle_percent;
+
+  //
+  //  Steering Read
+  //
+
+  if (joystick[1] < steering_middle - steering_dead_zone)
+  {
+    joystick[3] = char('L');
+    steering_percent = map(joystick[1], steering_middle - steering_dead_zone, steering_min, 0, 100);
+  }
+  else if (joystick[1] > steering_middle + steering_dead_zone)
+  {
+    joystick[3] = char('R');
+    steering_percent = map(joystick[1], steering_middle + steering_dead_zone, steering_max, 0, 100);
+  }
+  else
+    joystick[3] = char('S');
+  if (steering_percent > 100)
+    steering_percent = 100;
+  joystick[1] = steering_percent;
+
+  //
+  // Should We Send?
+  //
+  if (throttle_last != throttle_percent)
+  {
+    throttle_last = throttle_percent;
+    throttle_change = true;
+  }
+  if (steering_last != steering_percent)
+  {
+    steering_last = steering_percent;
+    steering_change = true;
+  }
+}
+
+void Recv_Joystick(uint8_t (&joystick)[4])
+{
+  unsigned long currentMillis = millis();
+  // This device is a RX node
+  if (currentMillis - previousMillis >= interval + recv_stop_time)
+  {
+    previousMillis = currentMillis; // Reset the recv timer so we dont just flood the monitor
+    Serial.println("\t-- Lost Connection to Transmitter --");
+  }
+  uint8_t pipe;
+  if (radio.available(&pipe))
+  {                                         // is there a payload? get the pipe number that recieved it
+    previousMillis = currentMillis;         // Reset the recv timer.
+    uint8_t bytes = radio.getPayloadSize(); // get the size of the payload
+    radio.read(&joystick, bytes);           // fetch payload from FIFO
+
+    Serial.print(F("Throttle: "));
+    Serial.print(char(joystick[2]));
+    Serial.print(F(" - "));
+    Serial.print(joystick[0]);
+    Serial.print("%");
+
+    Serial.print(F(" \tSteering: "));
+    Serial.print(char(joystick[3]));
+    Serial.print(F(" - "));
+    Serial.print(joystick[1]);
+    Serial.println("%");
+
+    int output = 90;
+    if (char(joystick[2]) == 'S')
+    {
+      servo_throttle.write(90);
+    }
+    else if (char(joystick[2]) == 'F')
+    {
+      output = map(joystick[0], 0, 100, 90, 180);
+      servo_throttle.write(output);
+    }
+    else if (char(joystick[2]) == 'R')
+    {
+      output = map(joystick[0], 0, 100, 90, 0);
+      servo_throttle.write(output);
+    }
+    Serial.println(output);
+    if (char(joystick[3]) == 'S')
+    {
+      servo_steering.write(90);
+    }
+    else if (char(joystick[3]) == 'R')
+    {
+      output = map(joystick[1], 0, 100, 90, 180);
+      servo_steering.write(output);
+    }
+    else if (char(joystick[3]) == 'L')
+    {
+      output = map(joystick[1], 0, 100, 90, 0);
+      servo_steering.write(output);
+    }
+    Serial.println(output);
+  }
+}
+
+void eepromr(byte addr) //reads the specified EEPROM address and prints result to serial monitor
+{
+  Serial.println("Reading from EEPROM");
+  byte value = EEPROM.read(addr);
+  Serial.print(addr);
+  Serial.print("\t");
+  Serial.print(value);
+  Serial.println();
+  delay(100);
+}
+
+void eepromwr(byte addr) //write parsed byte from serial to EEPROM address and prints the wrttien value to serial monitor
+{
+  Serial.println("Reading Serial In");
+  delay(100);
+  while (Serial.available() > 0)
+  {
+    Serial.println("Writing to EEPROM");
+    delay(100);
+    byte val = Serial.parseInt();
+    delay(100);
+    EEPROM.write(addr, val);
+
+    break;
+  }
+}
+
+void print_variables()
+{
+  Serial.println(F("Printing Stored Variables... "));
+  char output[255];
+  sprintf(output, "\
+  \tRole: %d\
+  \n\tThrottle_Dead_Zone: %d\
+  \n\tSteering_Dead_Zone: %d\
+  \n\tThottle_Middle: %d\
+  \n\tSteering Middle: %d\
+  \n\tThrottle_Min: %d\
+  \n\tThrottle_Max: %d\
+  \n\tSteering_Min %d\
+  \n\tSteering_Max %d\
+  ",
+          role, throttle_dead_zone, steering_dead_zone, throttle_middle, steering_middle, throttle_min, throttle_max, steering_min, steering_max);
+  Serial.println(output);
+}
+
+void check_serial_monitor() //allows entrence and exit of either function read or write
+{
+  while (Serial.available() > 0)
+  {
+    char inByte = Serial.read();
+
+    while (inByte == 'r') //if character "r" is sent from pc to arduino enter read function
+    {
+      eepromr(Serial.parseInt());
+      break;
+    }
+    while (inByte == 'w') //if character w is sent from pc to arduino enter write function
+    {
+      eepromwr(Serial.parseInt());
+      break;
+    }
+
+    while (inByte == 'c') //if character "r" is sent from pc to arduino enter read function
+    {
+      print_variables();
+      break;
+    }
+  }
+}
+
+void loop()
+{
+  check_serial_monitor();
+  if (role) // we are TX
+    Read_Joystick(joystick);
+  else // we are RX
+    Recv_Joystick(joystick);
+} // loop
