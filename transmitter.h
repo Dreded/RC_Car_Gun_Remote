@@ -37,8 +37,8 @@ private:
     {
         throttle_dead_zone = map(EEPROM.read(1),0,255,0,1024);
         steering_dead_zone = map(EEPROM.read(2),0,255,0,1024);
-        throttle_middle = map(EEPROM.read(3),0,255,0,1024);
-        steering_middle = map(EEPROM.read(4),0,255,0,1024);
+        throttle_middle = map(EEPROM.read(3),0,255,0,180);
+        steering_middle = map(EEPROM.read(4),0,255,0,180);
         throttle_min = map(EEPROM.read(5),0,255,0,1024);
         throttle_max = map(EEPROM.read(6),0,255,0,1024);
         steering_min = map(EEPROM.read(7),0,255,0,1024);
@@ -123,57 +123,24 @@ public:
 
         throttleValue = constrain(throttleValue,throttle_min,throttle_max);
         steeringValue = constrain(steeringValue,steering_min,steering_max);
-
-        uint8_t throttle_percent = 0;
-        uint8_t steering_percent = 0;
-
-        if (throttleValue < throttle_middle - throttle_dead_zone)
-        {
-            controls[2] = char('F');
-            throttle_percent = map(throttleValue, throttle_middle - throttle_dead_zone, throttle_min, 0, throttle_max_percent);
-        }
-        else if (throttleValue > throttle_middle + throttle_dead_zone)
-        {
-            controls[2] = char('R');
-            throttle_percent = map(throttleValue, throttle_middle + throttle_dead_zone, throttle_max, 0, throttle_max_percent);
-        }
-        else
-            controls[2] = char('S');
-        if (throttle_percent > throttle_max_percent)
-            throttle_percent = throttle_max_percent;
         
-        controls[0] = constrain(throttle_percent,0,throttle_max_percent);
+        controls[2] = throttle_middle;
+        controls[0] = map(throttleValue,throttle_min,throttle_max,0,180);
 
-        //
-        //  Steering Read
-        //
-
-        if (steeringValue < steering_middle - steering_dead_zone)
-        {
-            controls[3] = char('L');
-            steering_percent = map(steeringValue, steering_middle - steering_dead_zone, steering_min, 0, 100);
-        }
-        else if (steeringValue > steering_middle + steering_dead_zone)
-        {
-            controls[3] = char('R');
-            steering_percent = map(steeringValue, steering_middle + steering_dead_zone, steering_max, 0, 100);
-        }
-        else
-            controls[3] = char('S');
-        
-        controls[1] = constrain(steering_percent,0,100);
+        controls[3] = steering_middle;
+        controls[1] = map(steeringValue,steering_min,steering_max,0,180);
 
         //
         // Should We Send?
         //
-        if (throttle_last != throttle_percent)
+        if (throttle_last != controls[0])
         {
-            throttle_last = throttle_percent;
+            throttle_last = controls[0];
             throttle_change = true;
         }
-        if (steering_last != steering_percent)
+        if (steering_last != controls[1])
         {
-            steering_last = steering_percent;
+            steering_last = controls[1];
             steering_change = true;
         }
     }

@@ -7,18 +7,20 @@ private:
     uint8_t address[2][6] = {"1Node", "2Node"};
     bool role = 0;
     bool radioNumber = role;
-    unsigned long previousMillis = 0; // last time a command was sent
+    unsigned long previousMillis = 0;      // last time a command was sent
+    unsigned long servoPreviousMillis = 0; // last time a command was sent
+    long servoUpdateInterval = 5;          // time constant for timer
     long interval;
-    uint8_t controls[4];
+    uint8_t controls[4] = {90};
     Servo servo_throttle; // create servo object to control a servo
     Servo servo_steering;
     RF24 radio;
 
-    int throttleSmoothed = 512;
-    int throttleSmoothedPrev = throttleSmoothed;
+    float throttleSmoothed = 100;
+    float throttleSmoothedPrev = throttleSmoothed;
 
-    int steeringSmoothed = 512;
-    int steeringSmoothedPrev = steeringSmoothed;
+    float steeringSmoothed = 90;
+    float steeringSmoothedPrev = steeringSmoothed;
 
 public:
     void begin(size_t numberOfAuxServos, const byte *auxServoPinArray, byte throttleServoPin = 2, byte steeringServoPin = 3, long timeoutInterval = 1000)
@@ -47,7 +49,6 @@ public:
         servo_throttle.attach(2, 1000, 2000); // attach servo to indicated pin
         servo_steering.attach(3, 1000, 2000); // attach servo to indicated pin
         Servo servo_aux[numberOfAuxServos];
-        Serial.println(auxServoPinArray[3]);
         for (size_t i = 0; i < numberOfAuxServos; i++)
         {
             Serial.print("Initiating Servo: ");
@@ -72,73 +73,35 @@ public:
             radio.read(&controls, bytes);           // fetch payload from FIFO
 
             Serial.print(F("Throttle: "));
-            Serial.print(char(controls[2]));
-            Serial.print(F(" - "));
             Serial.print(controls[0]);
-            Serial.print("%");
 
             Serial.print(F(" \tSteering: "));
-            Serial.print(char(controls[3]));
-            Serial.print(F(" - "));
-            Serial.print(controls[1]);
-            Serial.println("%");
+            Serial.println(controls[1]);
         }
-        int output = 90;
-        if (char(controls[2]) == 'S')
-        {
-            servo_throttle.write(90);
-        }
-        else if (char(controls[2]) == 'F')
-        {
-            output = map(controls[0], 0, 100, 90, 180);
-            servo_throttle.write(output);
-        }
-        else if (char(controls[2]) == 'R')
-        {
-            output = map(controls[0], 0, 100, 90, 0);
-            servo_throttle.write(output);
-        }
-        if (char(controls[3]) == 'S')
-        {
-            //servo_steering.write(90);
-        }
-        else if (char(controls[3]) == 'L')
-        {
-            output = map(controls[1], 0, 100, 90, 180);
-            servo_steering.write(output);
-        }
-        else if (char(controls[3]) == 'R')
-        {
-            output = map(controls[1], 0, 100, 90, 0);
-            //servo_steering.write(output);
 
-            smoothServo(servo_steering, output, steeringSmoothed, steeringSmoothedPrev);
+        if (currentMillis - servoPreviousMillis >= servoUpdateInterval) //update servo interval seconds(200x per second)
+        {
+            servoPreviousMillis = currentMillis;
+            int requested = controls[0];
+            requested = map(controls[0], 0, 180, 180, 0); // flip it as our steering servo is backwards
+            updateServo(servo_throttle, requested, controls[2], throttleSmoothed, throttleSmoothedPrev,0.98);
+            requested = map(controls[1], 0, 180, 180, 0); // flip it as our steering servo is backwards
+            updateServo(servo_steering, requested, controls[3], steeringSmoothed, steeringSmoothedPrev);
         }
     }
 
-    void smoothServo(Servo &servo, int &output, int &smoothed, int &smoothedPrev)
+    void smoothServo(Servo &servo, int &requested, float &smoothed, float &smoothedPrev, float smoothingAmount)
     {
-        smoothed = (output * 0.02) + (smoothedPrev * 0.98);
+        smoothed = (requested * (1.0-smoothingAmount)) + (smoothedPrev * smoothingAmount);
         smoothedPrev = smoothed;
-        servo.write(steeringSmoothed);
-
-        // if (char(controls[3]) == 'S')
-        // {
-        //     servo_steering.write(90);
-        // }
-        // else if (char(controls[3]) == 'L')
-        // {
-        //     output = map(controls[1], 0, 100, 90, 180);
-        //     steeringSmoothed = (output * 0.02) + (steeringSmoothedPrev * 0.98);
-        //     steeringSmoothedPrev = steeringSmoothed;
-        //     servo_steering.write(steeringSmoothed);
-        // }
-        // else if (char(controls[3]) == 'R')
-        // {
-        //     output = map(controls[1], 0, 100, 90, 0);
-        //     steeringSmoothed = (output * 0.02) + (steeringSmoothedPrev * 0.98);
-        //     steeringSmoothedPrev = steeringSmoothed;
-        //     servo_steering.write(steeringSmoothed);
-        // }
+        servo.write(smoothed);
+    }
+    void updateServo(Servo &servo, int requested, int middle, float &smoothed, float &smoothedPrev, float smoothingAmount = 0.85)
+    {
+        int deadzoneCheck = requested - middle;
+        if (abs(deadzoneCheck) < 15)
+            requested = 90;
+        //smoothServo(servo, requested, smoothed, smoothedPrev, smoothingAmount);
+        servo.write(requested);
     }
 };
