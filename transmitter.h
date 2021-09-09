@@ -35,14 +35,14 @@ private:
 
     void readEEPROM()
     {
-        throttle_dead_zone = map(EEPROM.read(1),0,255,0,1024);
-        steering_dead_zone = map(EEPROM.read(2),0,255,0,1024);
-        throttle_middle = map(EEPROM.read(3),0,255,0,1024);
-        steering_middle = map(EEPROM.read(4),0,255,0,1024);
-        throttle_min = map(EEPROM.read(5),0,255,0,1024);
-        throttle_max = map(EEPROM.read(6),0,255,0,1024);
-        steering_min = map(EEPROM.read(7),0,255,0,1024);
-        steering_max = map(EEPROM.read(8),0,255,0,1024);
+        throttle_dead_zone = map(EEPROM.read(1),0,255,0,1023);
+        steering_dead_zone = map(EEPROM.read(2),0,255,0,1023);
+        throttle_middle = map(EEPROM.read(3),0,255,0,1023);
+        steering_middle = map(EEPROM.read(4),0,255,0,1023);
+        throttle_min = map(EEPROM.read(5),0,255,0,1023);
+        throttle_max = map(EEPROM.read(6),0,255,0,1023);
+        steering_min = map(EEPROM.read(7),0,255,0,1023);
+        steering_max = map(EEPROM.read(8),0,255,0,1023);
         Serial.println(F("Read Data from EEPROM."));
     }
 
