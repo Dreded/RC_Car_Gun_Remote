@@ -100,7 +100,7 @@ public:
         }
         if (char(controls[3]) == 'S')
         {
-            //servo_steering.write(90);
+            servo_steering.write(90);
         }
         else if (char(controls[3]) == 'L')
         {
@@ -110,9 +110,9 @@ public:
         else if (char(controls[3]) == 'R')
         {
             output = map(controls[1], 0, 100, 90, 0);
-            //servo_steering.write(output);
+            servo_steering.write(output);
 
-            smoothServo(servo_steering, output, steeringSmoothed, steeringSmoothedPrev);
+            //smoothServo(servo_steering, output, steeringSmoothed, steeringSmoothedPrev);
         }
     }
 
